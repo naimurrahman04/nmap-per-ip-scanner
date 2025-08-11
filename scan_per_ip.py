@@ -5,9 +5,10 @@ import shlex
 import time
 from pathlib import Path
 import ipaddress
+import argparse
 
 def read_targets(path: Path):
-    """Read targets from ip.txt; supports comments and CIDR expansion."""
+    """Read targets from file; supports comments and CIDR expansion."""
     targets = []
     if not path.exists():
         print(f"[!] {path} not found.")
@@ -16,22 +17,13 @@ def read_targets(path: Path):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        # Expand CIDRs into individual IPs; leave hostnames as-is
         try:
             net = ipaddress.ip_network(line, strict=False)
-            # For IPv4/IPv6 networks, iterate hosts (excludes network/broadcast for v4)
             targets.extend([str(h) for h in net.hosts()])
         except ValueError:
-            # Not a CIDR; assume single IP/hostname
             targets.append(line)
-    # De-duplicate while preserving order
     seen = set()
-    unique = []
-    for t in targets:
-        if t not in seen:
-            seen.add(t)
-            unique.append(t)
-    return unique
+    return [t for t in targets if not (t in seen or seen.add(t))]
 
 def sanitize_filename(s: str) -> str:
     """Make a safe filename from an IP/hostname."""
@@ -41,28 +33,22 @@ def check_nmap():
     try:
         subprocess.run(["nmap", "-V"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        print("[!] Nmap is not installed or not in PATH. Install it first (e.g., https://nmap.org/download.html).")
+        print("[!] Nmap is not installed or not in PATH. Install it first: https://nmap.org/download.html")
         sys.exit(1)
 
 def main():
-    print("=== Batch Nmap Scanner ===")
-    ip_file = Path("ip.txt")
+    parser = argparse.ArgumentParser(description="Batch Nmap scanner with per-IP reports")
+    parser.add_argument("-i", "--input", required=True, help="Input file containing IPs/hosts/CIDRs")
+    parser.add_argument("--nflag", default="-sV -Pn -T4 -p-", help="Nmap flags to use (default: '-sV -Pn -T4 -p-')")
+    parser.add_argument("--timeout", default="10m", help="Host timeout (default: 10m)")
+    args = parser.parse_args()
+
+    ip_file = Path(args.input)
     targets = read_targets(ip_file)
     if not targets:
-        print("[!] No targets found in ip.txt.")
+        print("[!] No targets found in file.")
         sys.exit(1)
 
-    # Ask for flags
-    default_flags = "-sV -Pn -T4 -p-"
-    user_flags = input(f"Enter Nmap flags (press Enter for default '{default_flags}'): ").strip()
-    flags = user_flags if user_flags else default_flags
-
-    # Optional host-timeout to avoid hanging forever
-    timeout_default = "10m"
-    timeout_in = input(f"Host timeout (e.g., 5m, 10m). Enter to use default '{timeout_default}': ").strip()
-    host_timeout = timeout_in if timeout_in else timeout_default
-
-    # Prepare output directory
     ts = time.strftime("%Y%m%d_%H%M%S")
     out_dir = Path(f"reports_{ts}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -71,29 +57,26 @@ def main():
 
     print(f"[+] Targets loaded: {len(targets)}")
     print(f"[+] Output directory: {out_dir.resolve()}")
-    print(f"[+] Using flags: {flags}")
-    print(f"[+] Host timeout: {host_timeout}")
+    print(f"[+] Using flags: {args.nflag}")
+    print(f"[+] Host timeout: {args.timeout}")
     print("-" * 60)
 
-    # Build base flag list safely
     try:
-        flag_list = shlex.split(flags)
+        flag_list = shlex.split(args.nflag)
     except ValueError as e:
         print(f"[!] Could not parse flags: {e}")
         sys.exit(1)
 
     for idx, target in enumerate(targets, 1):
         base_name = sanitize_filename(target)
-        out_base = out_dir / base_name  # nmap -oA will produce .nmap, .gnmap, .xml
+        out_base = out_dir / base_name
 
-        cmd = ["nmap", *flag_list, f"--host-timeout", host_timeout, "-oA", str(out_base), target]
+        cmd = ["nmap", *flag_list, "--host-timeout", args.timeout, "-oA", str(out_base), target]
         print(f"[{idx}/{len(targets)}] Scanning {target} ...")
-        # Show the exact command for auditability
         print("     " + " ".join(shlex.quote(c) for c in cmd))
 
         try:
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            # Save the live stdout/stderr into a companion .runlog for convenience
             (out_dir / f"{base_name}.runlog.txt").write_text(
                 "COMMAND:\n" + " ".join(shlex.quote(c) for c in cmd) +
                 "\n\nSTDOUT:\n" + res.stdout +
