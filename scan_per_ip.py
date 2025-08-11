@@ -22,7 +22,6 @@ def read_targets(path: Path):
             targets.extend([str(h) for h in net.hosts()])
         except ValueError:
             targets.append(line)
-    # de-dup while preserving order
     seen, unique = set(), []
     for t in targets:
         if t not in seen:
@@ -42,39 +41,33 @@ def check_nmap():
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Batch Nmap scanner: per-IP reports, CIDR expansion, run logs."
+        description="Batch Nmap scanner: per-IP .txt reports, CIDR expansion, run logs."
     )
     parser.add_argument("-i", "--input", required=True, help="Input file with IPs/hosts/CIDRs")
-    parser.add_argument("--timeout", default="10m", help="Nmap --host-timeout value (default: 10m)")
     parser.add_argument("--outdir", default=None, help="Custom output directory (default: reports_<timestamp>)")
-    # We’ll manually capture everything after --nflag so you don't need quotes
-    # IMPORTANT: keep --nflag as the last option in your command.
     parser.add_argument("--nflag", action="store_true",
                         help="Place this and then any nmap flags afterwards, e.g.: --nflag -sV -Pn")
-    # We need access to raw argv to capture flags after --nflag
     args, _unknown = parser.parse_known_args()
     return args
 
 def capture_nmap_flags():
     """Capture all tokens after --nflag from sys.argv (unquoted)."""
     if "--nflag" not in sys.argv:
-        return None  # means: use defaults
+        return None
     idx = sys.argv.index("--nflag")
     flags = sys.argv[idx+1:]
-    # If user provided nothing after --nflag, treat as None so defaults kick in
     return flags if flags else None
 
 def main():
     args = parse_args()
     raw_flags = capture_nmap_flags()
 
-    # Defaults if user didn't provide any flags after --nflag
+    # Defaults if no custom flags
     nmap_flags = raw_flags if raw_flags is not None else ["-sV", "-Pn", "-T4", "-p-"]
 
-    # Validate we didn't accidentally swallow other options
-    # (Because --nflag should be last; warn if we see our own options in flags)
+    # Ensure --nflag is last
     for tok in nmap_flags:
-        if tok in ("-i", "--input", "--timeout", "--outdir", "--nflag"):
+        if tok in ("-i", "--input", "--outdir", "--nflag"):
             print("[!] Place --nflag at the END of the command. Everything after it is treated as nmap flags.")
             sys.exit(2)
 
@@ -93,28 +86,23 @@ def main():
     print(f"[+] Targets loaded: {len(targets)}")
     print(f"[+] Output directory: {out_dir.resolve()}")
     print(f"[+] Using flags: {' '.join(shlex.quote(f) for f in nmap_flags)}")
-    print(f"[+] Host timeout: {args.timeout}")
     print("-" * 60)
 
     for idx, target in enumerate(targets, 1):
         base_name = sanitize_filename(target)
-        out_base = out_dir / base_name
+        out_file = out_dir / f"{base_name}.txt"
 
-        cmd = ["nmap", *nmap_flags, "--host-timeout", args.timeout, "-oA", str(out_base), target]
+        cmd = ["nmap", *nmap_flags, target]
         print(f"[{idx}/{len(targets)}] Scanning {target} ...")
         print("     " + " ".join(shlex.quote(c) for c in cmd))
 
         try:
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            (out_dir / f"{base_name}.runlog.txt").write_text(
-                "COMMAND:\n" + " ".join(shlex.quote(c) for c in cmd) +
-                "\n\nSTDOUT:\n" + res.stdout +
-                "\n\nSTDERR:\n" + res.stderr
-            )
+            with open(out_file, "w") as f:
+                res = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, text=True)
             if res.returncode == 0:
-                print(f"     [OK] Reports saved as {out_base}.nmap/.gnmap/.xml")
+                print(f"     [OK] Report saved: {out_file}")
             else:
-                print(f"     [!] Nmap exit code {res.returncode}. See {base_name}.runlog.txt for details.")
+                print(f"     [!] Nmap exit code {res.returncode}. Check {out_file} for partial results.")
         except Exception as e:
             print(f"     [!] Error scanning {target}: {e}")
 
