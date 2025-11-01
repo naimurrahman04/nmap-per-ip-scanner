@@ -1,37 +1,72 @@
-# Nmap Per-IP Interactive Scanner
+# Batch Nmap Scanner (Pause / Resume + Parallel Scans + Metadata Logging)
 
-This Python script reads IP addresses (or hostnames) from a text file, prompts the user for **Nmap flags** per IP, and generates **separate report files** for each scan.  
-It is designed for penetration testing workflows where different targets may require different scan parameters.
+This script automates large-scale **Nmap** scanning with the ability to:
+
+- Load targets from **IP list**, **hostnames**, or **CIDR ranges**
+- **Pause and resume** scans safely at any time (Ctrl-C)
+- Run scans **sequentially or in parallel** (`--workers`)
+- Save **full scan output** + machine-readable **metadata JSON**
+- Skip already-scanned hosts (or force re-scan with `--overwrite`)
+- Record consistent scan state in `scan_progress.json`
+
+Useful for **VAPT**, **asset discovery**, **shadow IT investigations**, and **internal infrastructure audits**.
 
 ---
 
 ## Features
-- Reads targets from `ip.txt` (one per line, supports comments with `#`).
-- Asks for Nmap flags individually for each IP.
-- Optional flag reuse mode (`--reuse`) to save typing for similar scans.
-- Generates separate `.nmap`, `.gnmap`, and `.xml` reports per target in a specified folder.
-- Cross-platform (Linux, macOS, Windows with Python 3).
+
+| Feature | Description |
+|--------|-------------|
+| CIDR expansion | Automatically expands network ranges to host IPs |
+| Pause / Resume | Safe resume using `--resume scan_progress.json` |
+| Parallel scanning | Adjustable concurrency via `--workers` |
+| Per-target timeout | Avoids scans hanging indefinitely |
+| Output logging | `.txt` full Nmap output + `.json` result metadata |
+| Run index | `index.json` records each scan session summary |
+| Skip existing results | Prevents duplicate work *(default)* |
 
 ---
 
 ## Requirements
-- **Python 3.6+**
-- [Nmap](https://nmap.org/download.html) installed and available in your system `PATH`.
 
----
+- Python **3.8+**
+- `nmap` installed and in `PATH`
 
-## Installation
-Clone or download the repository:
+Check if Nmap is installed:
 
 ```bash
-git clone https://github.com/yourusername/nmap-per-ip-scanner.git
-cd nmap-per-ip-scanner
+nmap -V
+---
+## Install on Debian/Ubuntu:
 
-nmap --version
-# Example targets
-192.168.1.1
-10.0.0.5
-scanme.nmap.org
+sudo apt-get update && sudo apt-get install nmap -y
 
-python3 scan_per_ip.py
-python3 scan_per_ip.py -i targets.txt -o myreports --reuse
+## Scan from a file
+---
+python3 scan_per_ip.py -i targets.txt
+
+## Use custom Nmap flags
+---
+python3 scan_per_ip.py -i targets.txt --nflag "-sV -Pn -T3 -p 22,80,443"
+
+## Provide flags after
+---
+python3 scan_per_ip.py -i targets.txt -- -sV -Pn -T4 -p-
+
+## Run multiple scans in parallel
+python3 scan_per_ip.py -i targets.txt --workers 3
+
+## Set per-target timeout (e.g., 20 minutes)
+
+python3 scan_per_ip.py -i targets.txt --timeout-sec 1200
+
+##Resume a paused scan
+python3 scan_per_ip.py --resume reports_2025xxxx_xxxxxx/scan_progress.json
+
+Force overwrite previously completed results
+python3 scan_per_ip.py -i targets.txt --overwrite
+
+Pipe targets from another tool
+cat cidr_list.txt | python3 scan_per_ip.py --workers 2
+
+
